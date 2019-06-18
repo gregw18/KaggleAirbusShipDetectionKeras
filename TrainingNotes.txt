@@ -1,0 +1,84 @@
+May 29, 2019
+Notebook: Training_Unet.ipynb
+After copying directory setup/data from my KaggleAirbusShipDetection project, was able to train, on 170 “big boat” images – selected to contain only boats or water, large boats. Used Adam(lr=1e-4), loss = mean_squared_error, metrics = accuracy. After 3 epochs, 26 steps per, batch size 3, had loss = 0.0084/0.0090, accuracy=0.9910/0.9904. Saved as freeze1.h5, as had trained with the resnet frozen.
+How to display predicted masks? Ran predict_generator on the model, on first the 10 images in the training directory. Ended up with 9, 768, 768, 1 (used batch size 3, 3 steps, so only predicted 9 images.) Did reshape(img, (768, 768))*255 for each img in y_pred, mpimg.imsave(data, cmap=’gray’), ended up with a bunch of images that appear to be empty. When checked each with np.amax on entire set, max val was 0.11, all results except that one had max values of 1e-5 or less. Thus, appears to be predicting 0 for every pixel again, same as my first attempt.
+1. Am I misinterpreting predictions?
+2. Do I need to rescale inputs?
+3. Am I using the wrong loss function?
+4. Are my non-zero values at least somewhere close to where the 1’s are in the masks? I.e. for a given mask, for each non-zero pixel, is corresponding pixel in prediction non-zero? Looks like test_generator.filenames shows files in directory, .index_array shows order images were used. If consider matching pixels, non-zero in target and predicted and zero in target and predicted to be hits (regardless of how far from 0 (or 1) the predicted pixel is, the predictions are pretty good – between 1293 and 11411 missed pixels per image, which is max 2% error. Thus, why are my predicted pixel values so close to zero? But, when compare number of non-zero pixels in the target masks to those in the predicted masks, 3 masks had 0 predicted ones and 6 had one predicted one, while there should have been between 1292 and 11410 pixels containing a non-zero value. Thus – yes, my model is predicting zero for everything.
+5. What do my actual target masks look like when loaded – 1’s and 0’s? Probably would have to create a custom generator, containing the standard one, log the output from the standard one. Actually, just manually instantiated the generators, called next on one, saved group, pulled out first item, analyzed it. Found ~2900 non-zero pixels, ~2300 containing 1’s. Makes sense, as the rotating would likely result in some “gray” pixels. Better off with no augmentation?
+Also, histogram is showing a bit less info than expected – seems to be doing separate one for each row in the image, with tiny bars showing for each. Want one set of bars across all pixels. Need to use np.ravel() on the data, to flatten it out into a single, 1-d tensor.
+6. What loss function did my Fastai models use? Looks like “flattenedLoss of CrossEntropyLoss()” - which may be cross entropy? Is, but “flattens” input and target first, which doesn’t make a lot of sense – flattens RGBA into RGB, grayscale matrix into a vector?
+Thus, for each element in index_array
+	filename = filenames[index_array]
+	mask = mpimg.imread(filename)
+	for row in range(0, mask.rows)
+		for col in range(0, mask.cols)
+			if mask(row, col) > 0
+				num hits += 1
+			else
+				num misses += 1
+print(hits, misses)
+Strange Fact: When matplotlib.mpimg.imread reads in a png file, it seems to automatically return an RGBA array, and divide the saved values by 255. Thus, my masks, which should have 0 or 1 in every dimension, only contain 0 and 1/255 = 0.0032931569. This makes comparisons to the predicted mask more complicated. To get number of bad pixels, if mask > 0 and pred > 0, or mask = 0 and pred = 0, bad pixel, else close?
+
+May 30, 2019
+Notebooks: Training_Unet, Training_Unet-R2
+Confirmed that output from my image_generators was as expected. 
+Using mean_squared_error, had max 1 pixel predicted - 1 in 9 test images – everything else much lower. To match masks, should have had values of 1. Thus, not doing good job with my highly skewed data – i.e. lots more non-boat pixels than boats. Other loss functions to try: binary_crossentropy, categorical_crossentropy.
+Using Training_Unet-R2.ipnyb. Switched loss function to binary_crossentropy, saved as freeze2.h5. Seemed to overfit – validation losses went back up, I should have stopped after 3 epochs, instead of doing 2 more.
+However, when show predicted masks, actually get boats! Inconsistent brightness in a boat, and across images, but actual boat shapes! 
+However, when ran my check of matching zeroes and nonzeroes across target and predicted masks, had lots of misses. Seem to be having problems with test_generator.index_array and test_generator.filenames. When look at predicted masks and compare to original images, they don’t match at all – order is different. 
+7. How to get original filenames for predictions, since test_generator.index_array and filenames don’t appear to give the information I think that they should?
+
+May 31, 2019
+Notebooks: Training_Unet-R2, Training_Unet-R3, Training_unet-MoreR4
+Want to optimize with current samples, then expand to my larger curated group of samples, see how accurate can get.
+First, how to measure how well a network is performing? Now watching several loss functions.
+Then, can I adjust learning rate, avoid overfitting, use different loss function, to better optimize the network?
+What is biggest batch size I can do? 3 works, 4 gives immediate oom (out of memory) error.
+Is augmentation helping? Yes – results aren’t as good without it.
+
+Tried Tversky loss as loss function, got bunch of empty masks – only one predicted pixel, and only value of 0.1. Actually, had lots of “nearly” zero pixels – tversky not a great loss function for my data?
+Reloaded freeze2.h5, changed loss to custom weighted_cross_entropy(2), another epoch. Got some boat pictures! Some pretty faint, one just a few dots, several mostly just outlines, a few fairly filled in – i.e. don’t seem quite as good as built-in binary_crossEntropy.
+Tried again with beta = 0.5, instead of 2. oom error, had to restart Jupyter and try again. Result – much less distinct boats – some images showing almost nothing, some just parts of an outline, only one reasonably filled in, but even that worse than beta=2.
+Looks like either name of variable returned from loss function, or fn inside that, is name used in status display for that loss – if want to avoid loss_1, loss_2, etc. Changed return variable name, still gave name of inner function, so that must be source of the name.
+Retrying with beta = 1, to see who has the best masks – reloaded freeze2 weights first. Some images were better filled in, but others were missing even more than beta 2.
+Disabled augmentation. Fairly close, but without augmentation was missing some more pixels – not quite as good. Thus, augmentation seems good.
+Training_Unet-R3. Taking best settings so far – Weighted Cross Entropy loss function, beta=4, training from scratch. 3 epochs, everything predicted at zero. Ran 3 more, still same. Changed learning rate around, got better, worse, better. See freeze3b.h5 for final model.
+Decided that was good enough for limited (171) image dataset, time to move on to bigger set.
+Try downsized images?
+Training_Unet-MoreR4. 629 curated images, believe no empties yet. Started training from scratch, updated steps per epoch to 167/41 for train/validate. Still using weighted cross entropy, beta = 4. Started with 3 epochs, using full-sized images. Masks looked reasonable, stopped for weekend. Need some better test images – curated, not in validation/training data. Will pick some out manually, all types of images – ocean only, ocean+coast, boats/noboats, various lighting scenarios. Will still stick mainly with images with boats, as having several hundred nearly identical noboat images seems like a waste – a few of each type should be sufficient. Will measure my metrics on these images, so need labels as well. Will also pick around 30 to view what predicted masks look like.
+
+June 3, 2019
+Notebook: Training_Unet-MoreR4
+Created subset of 215 images, broadly representative of the overall dataset, but with fewer empty images, for testing. Then created a list of 30 of those files and a program to display the corresponding original images, target masks and predicted masks. Tested, found that my last network from May 30 wasn’t too bad, trained for 3 more epochs, didn’t change much.
+Also added evaluate call, to measure how well predictions are doing for this new test set.
+
+June 4, 2019
+Notebook: Training_Unet-MoreR4
+Want to see if decaying learning rate, like fastai would be helpful, would also be interesting to do a plot of various learning rates, also like fastai.
+Should I be taking output from Resnet50 from somewhere other than where I currently am? Already have “include_top=False”.
+Also should unfreeze resnet50.
+Momentum, decay. Adam optimizer have default values for these, so will leave alone.
+Ran 6 epochs at lr=1e-4, then another 3, numbers improved slightly, images not noticeably.
+Unfroze resnet, knocked lr down to 1e-5, 3 epochs. OOM errors, had to reduce batch size from 3 to 2. Estimated time per epoch started at 1.5 hours, eventually dropped to 15 minutes. (Was 11 minutes for frozen network.) 
+
+lr_find in Keras
+Run one minibatch at each LR rate from low to high, at given increment, graph result.
+I.e. evaluate_generator, steps=1 for various learning rates. Have to recompile model before every call, restore original LR when done.
+
+June 5, 2019
+Notebook: Training_Unet-FindLrR5
+Started using LRFind from https://www.jeremyjordan.me/nn-learning-rate/, to see if could get better training. Notebook Training_Unet-FindLrR5. 
+First attempt is with last network from yesterday – not sure if resnet is frozen or not. It was frozen, showed fairly constant loss until above 1e-3 – sudden spike, then random results.
+Unfroze, tried again, similar results. But, scale is somewhat messed up by the huge step loss, so trying again, unfrozen, with max lr of 1e-3, instead of 1e-2.
+Got another strange looking chart, but picked a small lr (6e-6) and ran 6 epochs. Training and validation numbers improved a bit (except for Tversky), but test data was down a bit. Predicted images didn’t look that different.
+Trying 3 more epochs, with loss switched to tversky, as that number is a reasonable size, rest are all close to zero. Tversky went quite low, but other metrics really blew up. Resulting images had yellow background instead of black, green showing edges, but not a lot of boat edges – sometimes showing boundaries between different textures of water. The current tversky function isn’t helping!
+Decided to look for a better Tversky implementation. Found https://www.groundai.com/project/a-novel-focal-tversky-loss-function-with-improved-attention-u-net-for-lesion-segmentation/, code at https://github.com/nabsabraham/focal-tversky-unet (link from article didn’t work for some reason.) Trying 3 epochs with their tversky_loss, starting from unfreeze5.h5. Images were definitely different – some boats more highlighted, some boats less.
+Ran LRFind, got weird graph, picked 6e-5 as longest, steepest downward slope, ran 3 epochs, loss increased a bit, most of training metrics increased a bit, validation increased a bit, for test, loss increased, rest of metrics got worse, except for original Tversky, which improved a bit. Images more solid/filled in, but also a bit oversized, and some images lost predictions.
+
+June 6, 2019
+Notebook: Training_Unet-FindLrR5
+Trying focal_tversky. Started with unfrozen model, lr=6e-r, starting with final model from yesterday (unfreeze5b.h5), didn’t really improve training metrics at all, but validation improved a bit. Ran lr_find, another weird learning rate chart (flat, dropped down, bounced around, then flat again), picked new lr=3e-4, 3 more epochs. Training numbers improved a bit, but validation was worse, as was test. Images had a lot of false positives – pretty much anywhere there was land, but at sea as well, and more missed boats. Believe hyperparameters used were designed to minimize false negatives, because came from medical imaging – adjust to balance better?
+
+
